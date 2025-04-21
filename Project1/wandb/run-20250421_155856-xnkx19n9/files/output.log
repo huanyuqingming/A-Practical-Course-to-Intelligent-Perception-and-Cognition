@@ -1,0 +1,8 @@
+Epoch 1/30:   0%|                                                                                                 | 0/146 [00:00<?, ?batch/s]
+Traceback (most recent call last):
+  File "D:\A-Practical-Course-to-Intelligent-Perception-and-Cognition\Project1\execute.py", line 47, in <module>
+    utils.train_model(
+  File "D:\A-Practical-Course-to-Intelligent-Perception-and-Cognition\Project1\utils.py", line 36, in train_model
+    input_ids = batch["input_ids"].to(device)
+                ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'list' object has no attribute 'to'
