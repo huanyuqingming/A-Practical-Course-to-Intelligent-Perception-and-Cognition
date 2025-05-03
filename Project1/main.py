@@ -10,7 +10,7 @@ import wandb
 
 import data
 import model
-# python main.py --cuda --model=GPT2 --lr=1 --nhid=1024 --nlayers=8
+
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/gigaspeech',
                     help='location of the data corpus')
