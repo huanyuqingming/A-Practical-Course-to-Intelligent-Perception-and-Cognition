@@ -6,15 +6,16 @@ import os
 import torch
 import torch.nn as nn
 import torch.onnx
+import wandb
 
 import data
 import model
-
+# python main.py --cuda --model=GPT2 --lr=1 --nhid=1024 --nlayers=8
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/gigaspeech',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
-                    help='type of network (RNN_TANH, RNN_RELU, LSTM, GRU, Transformer)')
+                    help='type of network (RNN_TANH, RNN_RELU, LSTM, GRU, Transformer, GPT2)')
 parser.add_argument('--emsize', type=int, default=200,
                     help='size of word embeddings')
 parser.add_argument('--nhid', type=int, default=200,
@@ -33,6 +34,8 @@ parser.add_argument('--bptt', type=int, default=35,
                     help='sequence length')
 parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
+parser.add_argument('--max_len', type=int, default=1024,
+                    help='max length of the sequence for transformer model')
 parser.add_argument('--tied', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--seed', type=int, default=1111,
@@ -50,6 +53,41 @@ parser.add_argument('--nhead', type=int, default=2,
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 args = parser.parse_args()
+default_args = {action.dest: action.default for action in parser._actions}
+
+modified_params = {}
+for param, value in vars(args).items():
+    if param == 'model':
+        continue
+    if param in default_args and value != default_args[param]:
+        modified_params[param] = value
+
+name_parts = [args.model]
+for param, value in modified_params.items():
+    if isinstance(value, bool):
+        name_parts.append(f"{param}")
+    else:
+        name_parts.append(f"{param}={value}")
+
+wandb_name = ' '.join(name_parts)
+wandb.init(project="LM-compare", name=wandb_name, config={
+    "lr": 20,
+    "batch_size": 800,
+    "epochs": 40,
+    "model": "LSTM",
+    "emsize": 200,
+    "nhid": 200,
+    "nlayers": 2,
+    "dropout": 0.2,
+    "max_len": 1024,
+    "tied": False,
+    "nhead": 2,
+    "bptt": 35,
+    "seed": 1111,
+    "cuda": torch.cuda.is_available()
+})
+
+wandb.config.update(args, allow_val_change=True)
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
@@ -98,6 +136,8 @@ test_data = batchify(corpus.test, eval_batch_size)
 ntokens = len(corpus.dictionary)
 if args.model == 'Transformer':
     model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
+elif args.model == 'GPT2':
+    model = model.GPT2Model(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout, args.max_len).to(device)
 else:
     model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
 
@@ -142,12 +182,12 @@ def evaluate(data_source):
     model.eval()
     total_loss = 0.
     ntokens = len(corpus.dictionary)
-    if args.model != 'Transformer':
+    if args.model != 'Transformer' and args.model != 'GPT2':
         hidden = model.init_hidden(eval_batch_size)
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, args.bptt):
             data, targets = get_batch(data_source, i)
-            if args.model == 'Transformer':
+            if args.model == 'Transformer' or args.model == 'GPT2':
                 output = model(data)
                 output = output.view(-1, ntokens)
             else:
@@ -163,14 +203,14 @@ def train():
     total_loss = 0.
     start_time = time.time()
     ntokens = len(corpus.dictionary)
-    if args.model != 'Transformer':
+    if args.model != 'Transformer' and args.model != 'GPT2':
         hidden = model.init_hidden(args.batch_size)
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         data, targets = get_batch(train_data, i)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         model.zero_grad()
-        if args.model == 'Transformer':
+        if args.model == 'Transformer' or args.model == 'GPT2':
             output = model(data)
             output = output.view(-1, ntokens)
         else:
@@ -186,6 +226,7 @@ def train():
 
         total_loss += loss.item()
 
+        cur_loss = total_loss / args.log_interval
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
@@ -193,10 +234,15 @@ def train():
                     'loss {:5.2f} | ppl {:8.2f}'.format(
                 epoch, batch, len(train_data) // args.bptt, lr,
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
+            
+            # wandb.log({"train_loss": cur_loss, "train_ppl": math.exp(cur_loss)})
+
             total_loss = 0
             start_time = time.time()
         if args.dry_run:
             break
+
+    wandb.log({"train_loss": cur_loss, "train_ppl": math.exp(cur_loss), "epoch": epoch})
 
 
 def export_onnx(path, batch_size, seq_len):
@@ -218,11 +264,12 @@ try:
         train()
         val_loss = evaluate(val_data)
         print('-' * 89)
-        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+        print('| epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss)))
         print('-' * 89)
         # Save the model if the validation loss is the best we've seen so far.
+        wandb.log({"valid_loss": val_loss, "valid_ppl": math.exp(val_loss), "epoch": epoch})
         if not best_val_loss or val_loss < best_val_loss:
             with open(args.save, 'wb') as f:
                 torch.save(model, f)
@@ -230,13 +277,23 @@ try:
         else:
             # Anneal the learning rate if no improvement has been seen in the validation dataset.
             lr /= 4.0
+
+        # test
+        test_loss = evaluate(test_data)
+        print('=' * 89)
+        print('| epoch {:3d} | test loss {:5.2f} | test ppl {:8.2f}'.format(
+            epoch, test_loss, math.exp(test_loss)))
+        print('=' * 89)
+        wandb.log({"test_loss": test_loss, "test_ppl": math.exp(test_loss), "epoch": epoch})
+
+
 except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')
 
 # Load the best saved model.
 with open(args.save, 'rb') as f:
-    model = torch.load(f)
+    model = torch.load(f, weights_only=False)
     # after load the rnn params are not a continuous chunk of memory
     # this makes them a continuous chunk, and will speed up forward pass
     # Currently, only rnn model supports flatten_parameters function.
@@ -244,12 +301,16 @@ with open(args.save, 'rb') as f:
         model.rnn.flatten_parameters()
 
 # Run on test data.
-test_loss = evaluate(test_data)
-print('=' * 89)
-print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
-    test_loss, math.exp(test_loss)))
-print('=' * 89)
+# test_loss = evaluate(test_data)
+# print('=' * 89)
+# print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+#     test_loss, math.exp(test_loss)))
+# print('=' * 89)
+
+# wandb.log({"test_loss": test_loss, "test_ppl": math.exp(test_loss)})
 
 if len(args.onnx_export) > 0:
     # Export the model in ONNX format.
     export_onnx(args.onnx_export, batch_size=1, seq_len=args.bptt)
+
+wandb.finish()

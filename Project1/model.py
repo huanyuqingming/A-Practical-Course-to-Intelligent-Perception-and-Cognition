@@ -149,3 +149,72 @@ class TransformerModel(nn.Module):
         output = self.transformer_encoder(src, self.src_mask)
         output = self.decoder(output)
         return F.log_softmax(output, dim=-1)
+
+class GPT2Block(nn.Module):
+    def __init__(self, ninp, nhead, nhid, dropout):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(ninp)
+        self.attn = nn.MultiheadAttention(embed_dim=ninp, num_heads=nhead, dropout=dropout, batch_first=True)
+        self.ln2 = nn.LayerNorm(ninp)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(ninp, nhid),
+            nn.GELU(),
+            nn.Linear(nhid, ninp),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x, attn_mask=None):
+        x_attn, _ = self.attn(self.ln1(x), self.ln1(x), self.ln1(x), attn_mask=attn_mask)
+        x = x + x_attn
+
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+class GPT2Model(nn.Module):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.1, max_len=1024):
+        super().__init__()
+        self.ninp = ninp
+        self.max_len = max_len
+
+        self.token_embedding = nn.Embedding(ntoken, ninp)
+        self.position_embedding = nn.Embedding(max_len, ninp)
+        self.drop = nn.Dropout(dropout)
+
+        self.blocks = nn.ModuleList([
+            GPT2Block(ninp, nhead, nhid, dropout) for _ in range(nlayers)
+        ])
+
+        self.ln_f = nn.LayerNorm(ninp)
+        self.head = nn.Linear(ninp, ntoken, bias=False)
+
+        self.init_weights()
+
+    def init_weights(self):
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.position_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.head.weight, mean=0.0, std=0.02)
+
+    def _generate_causal_mask(self, size, device):
+        mask = torch.triu(torch.ones(size, size, device=device), diagonal=1)
+        mask = mask.masked_fill(mask == 1, float('-inf'))
+        return mask
+
+
+    def forward(self, x):
+        B, T = x.size()
+        assert T <= self.max_len, f"Sequence length {T} exceeds model maximum length {self.max_len}"
+
+        token_emb = self.token_embedding(x)
+        pos = torch.arange(0, T, device=x.device).unsqueeze(0)
+        pos_emb = self.position_embedding(pos)
+        x = self.drop(token_emb + pos_emb)
+
+        mask = self._generate_causal_mask(T, x.device)
+
+        for block in self.blocks:
+            x = block(x, attn_mask=mask)
+
+        x = self.ln_f(x)
+        output = self.head(x)
+        return F.log_softmax(output, dim=-1)
