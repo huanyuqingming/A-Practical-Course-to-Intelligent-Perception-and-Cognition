@@ -3,6 +3,9 @@
 **/*.pyc
 **/*.pyo
 **/*.pyd
+**/*.pth
+
+
 .vscode/
 
 **/wikitext/*
