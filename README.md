@@ -24,3 +24,16 @@ python main.py --cuda --model=LSTM --nlayers=4 --nhid=512 --dropout=0.3
 cd Project1
 python main.py --cuda --model=Transformer --nlayers=8 --nhid=1024 --emsize=512 --dropout=0.1 --bptt=200 --lr=5
 ```
+
+## Project2：图像生成
+最小重建误差的复现方式为：
+```bash
+cd Project2
+python main.py --z_dimension=32
+```
+
+可视化方式为：
+```bash
+cd Project2
+python plot.py --z_dimension=<NEEDED_DIMENSION>
+```
