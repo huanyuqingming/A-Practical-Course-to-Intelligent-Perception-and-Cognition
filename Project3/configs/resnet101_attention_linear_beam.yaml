@@ -3,15 +3,17 @@ outputpath: experiments/resnet101_attention
 
 dataset_base_path: /home/TuYuqing/A-Practical-Course-to-Intelligent-Perception-and-Cognition/Project3/data/flickr8k
 vocab_path: utils/vocab_set.pkl
-embedding_dim: 300
+
+decoder_size: 512
+embedding_dim: 256
 attention_dim: 256
-decoder_size: 256
-sample_method: greed # 'greed' or 'beam'
+sample_method: beam # 'greed' or 'beam'
 train_args:
     batch_size: 128
     learning_rate: !!float 1e-3
     num_epochs: 45
     save_freq: 10
+    sample_method: linear
 eval_args:
     batch_size: 1
 

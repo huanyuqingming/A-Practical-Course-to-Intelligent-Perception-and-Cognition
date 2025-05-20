@@ -7,8 +7,8 @@
 #SBATCH --output=slurm_logs/%j.out
 #SBATCH --error=slurm_logs/%j.err
 
-module load openjdk/11.0.17_8
+# module load openjdk/11.0.17_8
 
-
+export CUDA_VISIBLE_DEVICES=1
 python main.py train_evaluate --config_file configs/resnet101_attention.yaml
 

@@ -8,6 +8,7 @@ import numpy as np
 import fire
 import pandas as pd
 import torch
+import wandb
 from tqdm import tqdm
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.utils.data import DataLoader
@@ -94,7 +95,7 @@ class Runner(object):
             "test": test_loader
         }
 
-    def train_model(self, train_loader, model, loss_fn, optimizer, desc=''):
+    def train_model(self, train_loader, model, loss_fn, optimizer, desc='', eps=1.0):
         running_acc = 0.0
         running_loss = 0.0
         model.train()
@@ -106,7 +107,7 @@ class Runner(object):
             optimizer.zero_grad()
 
             scores, caps_sorted, decode_lengths, alphas, sort_ind = model(
-                images, captions, lengths)
+                images, captions, lengths, eps=eps)
 
             # Since decoding starts with <start>, the targets are all words after <start>, up to <end>
             targets = caps_sorted[:, 1:]
@@ -188,8 +189,10 @@ class Runner(object):
                           vocab_size=vocab_size).to(self.device)
         logger.info(model)
         model_path = os.path.join(args["outputpath"],
-            f"{args['model']}_b{args['train_args']['batch_size']}_"
-            f"emd{args['embedding_dim']}")
+            f"{args['model']}_dec{args['decoder_size']}_"
+            f"emd{args['embedding_dim']}_{args['train_args']['sample_method']}_{args['sample_method']}",
+            f"{args['model']}_dec{args['decoder_size']}_"
+            f"emd{args['embedding_dim']}_{args['train_args']['sample_method']}_{args['sample_method']}")
         
         pad_value = dataloaders["train"].dataset.pad_value
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=pad_value).to(self.device)
@@ -203,11 +206,23 @@ class Runner(object):
         val_bleu4_max = 0.0
         num_epochs = args["train_args"]["num_epochs"]
         for epoch in range(num_epochs):
+
+            sample_method = args["train_args"]['sample_method']
+            if sample_method == 'linear':
+                eps = max(0.1, 1.0 - 0.05 * epoch)
+            elif sample_method == 'exp':
+                eps = 0.95 ** epoch
+            elif sample_method == 'sigmoid':
+                eps = 5 / (5 + np.exp(epoch / 5))
+            else:
+                eps = 1.0
+
             train_loss = self.train_model(desc=f'Epoch {epoch + 1}/{num_epochs}',
                                           model=model,
                                           optimizer=optimizer,
                                           loss_fn=loss_fn,
-                                          train_loader=dataloaders["train"])
+                                          train_loader=dataloaders["train"],
+                                          eps=eps)
             with torch.no_grad():
                 # train_bleu = self.evaluate_model(
                     # desc=f'Train eval: ', model=model,
@@ -221,6 +236,16 @@ class Runner(object):
                     tensor_to_word_fn=tensor_to_word_fn,
                     sample_method=args['sample_method'],
                     word2idx=word2idx, data_loader=dataloaders["val"])
+
+                wandb.log({
+                    "epoch": epoch + 1,
+                    "train_loss": train_loss,
+                    "val_bleu1": val_bleu[1],
+                    "val_bleu2": val_bleu[2],
+                    "val_bleu3": val_bleu[3],
+                    "val_bleu4": val_bleu[4],
+                })
+
                 msg = f"Epoch {epoch + 1}/{num_epochs}, train_loss: " \
                     f"{train_loss:.3f}, val_bleu1: {val_bleu[1]:.3f}, " \
                     f"val_bleu4: {val_bleu[4]:.3f}"
@@ -236,6 +261,7 @@ class Runner(object):
                     # 'train_bleus': train_bleu,
                     'val_bleus': val_bleu,
                 }
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
                 torch.save(state, '{}_latest.pt'.format(model_path))
                 if train_loss < train_loss_min:
                     train_loss_min = train_loss
@@ -266,6 +292,17 @@ class Runner(object):
                 word2idx=word2idx,
                 sample_method=args['sample_method'],
                 data_loader=dataloaders["test"])
+            
+            metrics = {
+                "final_train_bleu1": train_bleu[1],
+                "final_train_bleu4": train_bleu[4],
+                "final_val_bleu1": val_bleu[1],
+                "final_val_bleu4": val_bleu[4],
+                "final_test_bleu1": test_bleu[1],
+                "final_test_bleu4": test_bleu[4],
+            }
+            wandb.log(metrics)
+
             logger.info("evaluation of the best validation performance model: ")
             for setname, result in zip(('train', 'val', 'test'),
                                        (train_bleu, val_bleu, test_bleu)):
@@ -317,8 +354,10 @@ class Runner(object):
                           decoder_dim=args["decoder_size"],
                           vocab_size=vocab_size, train_embd=False)
         model_path = os.path.join(args["outputpath"],
-            f"{args['model']}_b{args['train_args']['batch_size']}_"
-            f"emd{args['embedding_dim']}")
+            f"{args['model']}_dec{args['decoder_size']}_"
+            f"emd{args['embedding_dim']}_{args['train_args']['sample_method']}_{args['sample_method']}",
+            f"{args['model']}_dec{args['decoder_size']}_"
+            f"emd{args['embedding_dim']}_{args['train_args']['sample_method']}_{args['sample_method']}")
         state = torch.load(f'{model_path}_best_val.pt', map_location="cpu")
         model.load_state_dict(state["state_dict"])
         model = model.to(self.device)
@@ -333,6 +372,12 @@ class Runner(object):
                 tensor_to_word_fn=tensor_to_word_fn, data_loader=test_loader,
                 sample_method=args['sample_method'], word2idx=word2idx,
                 return_output=True)
+            
+            pred_table = wandb.Table(columns=["Image ID", "Reference", "Prediction"])
+            for imgid, pred, refs in zip(imgids, predictions, references):
+                refs_str = "\n".join([" ".join(r) for r in refs])
+                pred_table.add_data(imgid, refs_str, " ".join(pred))
+
             key_to_pred = {}
             key_to_refs = {}
             output_pred = []
@@ -356,17 +401,44 @@ class Runner(object):
                     if method == "Bleu":
                         for n in range(4):
                             print("Bleu-{}: {:.3f}".format(n + 1, score[n]), file=writer)
+                            wandb.log({f"test/Bleu-{n+1}": score[n]})
                     else:
                         print(f"{method}: {score:.3f}", file=writer)
+                        wandb.log({f"test/{method}": score})
                     if method in ["CIDEr", "SPICE"]:
                         output["SPIDEr"] += score
                 output["SPIDEr"] /= 2
                 print(f"SPIDEr: {output['SPIDEr']:.3f}", file=writer)
+                wandb.log({"test/SPIDEr": output["SPIDEr"]})
+
+            wandb.log({
+                "test_predictions": pred_table,
+                "test/Bleu-1": output["Bleu"][0],
+                "test/Bleu-2": output["Bleu"][1],
+                "test/Bleu-3": output["Bleu"][2],
+                "test/Bleu-4": output["Bleu"][3],
+                "test/Rouge": output["Rouge"],
+                "test/METEOR": output["METEOR"],
+                "test/CIDEr": output["CIDEr"],
+                "test/SPICE": output["SPICE"],
+                "test/SPIDEr": output["SPIDEr"]
+            })
 
             json.dump(output_pred, open(f"{model_path}_predictions.json", "w"), indent=4)
 
 
     def train_evaluate(self, config_file, **kwargs):
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
+
+        wandb_name = f"{config['model']}_dec{config['decoder_size']}_emd{config['embedding_dim']}_{config['train_args']['sample_method']}_{config['sample_method']}"
+        wandb.init(
+            project="IC",
+            name=wandb_name,
+            config=config
+        )
+        wandb.save(config_file) 
+
         self.train(config_file, **kwargs)
         self.evaluate(config_file, **kwargs)
 

@@ -32,7 +32,7 @@ if __name__ == "__main__":
         else:
             key_to_refs[row[0]] = [row[1]]
 
-    scorers = [Bleu(n=4), Rouge(), Meteor(), Cider()]
+    scorers = [Bleu(n=4), Rouge(), Meteor(), Cider(), Spice()]
     key_to_refs = ptb_tokenize(key_to_refs)
     key_to_pred = ptb_tokenize(key_to_pred)
 

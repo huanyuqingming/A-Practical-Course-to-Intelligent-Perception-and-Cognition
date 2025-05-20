@@ -37,3 +37,47 @@ python main.py --z_dimension=32
 cd Project2
 python plot.py --z_dimension=<NEEDED_DIMENSION>
 ```
+
+## Project3：图片摘要生成
+
+将数据集按照以下路径格式配置：
+```
+└── data
+    └── flickr8
+        ├── caption.txt
+        ├── test_imgs.txt
+        ├── train_imgs.txt
+        ├── val_ings.txt
+        └── image
+            └── *.jpg
+        
+```
+
+训练CNN-LSTM with attention：
+```bash
+cd Project3
+python main.py train_evaluate --config_file configs/resnet101_attention_dec{decoder_size}_emd{embedding_dim}.yaml
+```
+
+使用Doubao-1.5-vision-pro大模型推理：
+```bash
+cd Project3
+export ARK_API_KEY=<YOUR_API_KEY>
+export MODEL_TYPE=<YOUR_MODEL_TYPE>
+python vlm.py
+```
+
+计算指标：
+```bash
+cd Project3
+
+# 对CNN-LSTM with attention模型
+python evaluate.py --prediction_file experiments/resnet101_attention/resnet101_attention_dec{decoder_size}_emd{embedding_dim}/resnet101_attention_dec{decoder_size}_emd{embedding_dim}_predictions.json \
+                   --reference_file data/flickr8k/caption.txt \
+                   --output_file experiments/resnet101_attention/resnet101_attention_dec{decoder_size}_emd{embedding_dim}/resnet101_attention_dec{decoder_size}_emd{embedding_dim}_coco_scores.txt
+
+# 对Doubao-1.5-vision-pro大模型
+python evaluate.py --prediction_file experiments/Doubao-1.5-vision-pro/predictions.json \
+                   --reference_file data/flickr8k/caption.txt \
+                   --output_file experiments/Doubao-1.5-vision-pro/coco_scores.txt
+```

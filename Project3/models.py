@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torchvision
-
+import random
 
 class Encoder(nn.Module):
     """
@@ -149,7 +149,7 @@ class DecoderWithAttention(nn.Module):
         c = self.init_c(mean_encoder_out)
         return h, c
 
-    def forward(self, encoder_out, encoded_captions, caption_lengths):
+    def forward(self, encoder_out, encoded_captions, caption_lengths, eps=1.0):
         """
         Forward propagation.
 
@@ -203,14 +203,22 @@ class DecoderWithAttention(nn.Module):
             # [batch_size_t, encoder_dim]
             gate = self.sigmoid(self.f_beta(h[:batch_size_t]))  # gating scalar,
             attention_weighted_encoding = gate * attention_weighted_encoding
+
+            # Scheduled Sampling
+            if t == 0 or random.random() < eps:
+                embedding = embeddings[:batch_size_t, t, :]
+            else:
+                embedding = self.embedding(last_token[:batch_size_t])
+
             # [batch_size_t, decoder_dim]
             h, c = self.decode_step(
-                torch.cat([embeddings[:batch_size_t, t, :], attention_weighted_encoding], dim=1),
+                torch.cat([embedding, attention_weighted_encoding], dim=1),
                 (h[:batch_size_t], c[:batch_size_t]))
             # [batch_size_t, vocab_size]
             preds = self.fc(self.dropout(h))
             predictions[:batch_size_t, t, :] = preds
             alphas[:batch_size_t, t, :] = alpha
+            last_token = preds.argmax(dim=1)
 
         return predictions, encoded_captions, decode_lengths, alphas, sort_ind
 
@@ -346,7 +354,7 @@ class Captioner(nn.Module):
         self.decoder = DecoderWithAttention(attention_dim, embed_dim,
             decoder_dim, vocab_size, encoder_dim, dropout)
 
-    def forward(self, images, encoded_captions, caption_lengths):
+    def forward(self, images, encoded_captions, caption_lengths, eps=1.0):
         """
         :param images: [b, 3, h, w]
         :param encoded_captions: [b, max_len]
@@ -355,7 +363,7 @@ class Captioner(nn.Module):
         """
         encoder_out = self.encoder(images)
         decoder_out = self.decoder(encoder_out, encoded_captions,
-                                   caption_lengths.unsqueeze(1))
+                                   caption_lengths.unsqueeze(1), eps=eps)
         return decoder_out
 
     def sample(self, images, startseq_idx, endseq_idx=-1, max_len=40,
