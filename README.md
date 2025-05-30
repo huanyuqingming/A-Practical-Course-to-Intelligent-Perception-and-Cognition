@@ -56,7 +56,7 @@ python plot.py --z_dimension=<NEEDED_DIMENSION>
 训练CNN-LSTM with attention：
 ```bash
 cd Project3
-python main.py train_evaluate --config_file configs/resnet101_attention_dec{decoder_size}_emd{embedding_dim}.yaml
+python main.py train_evaluate --config_file configs/<CONFIG_NAME>.yaml
 ```
 
 使用Doubao-1.5-vision-pro大模型推理：
@@ -72,9 +72,9 @@ python vlm.py
 cd Project3
 
 # 对CNN-LSTM with attention模型
-python evaluate.py --prediction_file experiments/resnet101_attention/resnet101_attention_dec{decoder_size}_emd{embedding_dim}/resnet101_attention_dec{decoder_size}_emd{embedding_dim}_predictions.json \
+python evaluate.py --prediction_file experiments/resnet101_attention/<CONFIG_NAME>/<CONFIG_NAME>_predictions.json \
                    --reference_file data/flickr8k/caption.txt \
-                   --output_file experiments/resnet101_attention/resnet101_attention_dec{decoder_size}_emd{embedding_dim}/resnet101_attention_dec{decoder_size}_emd{embedding_dim}_coco_scores.txt
+                   --output_file experiments/resnet101_attention/<CONFIG_NAME>/<CONFIG_NAME>_coco_scores.txt
 
 # 对Doubao-1.5-vision-pro大模型
 python evaluate.py --prediction_file experiments/Doubao-1.5-vision-pro/predictions.json \
